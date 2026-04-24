@@ -43,6 +43,10 @@ export function NotesApp({ initialNotes, initialError }: Props) {
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingSave = useRef<PendingSave | null>(null);
   const latestListRequest = useRef(0);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const deleteCancelRef = useRef<HTMLButtonElement | null>(null);
+  const createNoteShortcutRef = useRef<() => Promise<void>>(async () => {});
   const lastSavedSnapshots = useRef<Record<string, SaveSnapshot>>(
     Object.fromEntries(initialNotes.map((note) => [note.id, { title: note.title, content: note.content }])),
   );
@@ -121,6 +125,18 @@ export function NotesApp({ initialNotes, initialError }: Props) {
     setSaveStates((current) => current[selectedNote.id] ? current : { ...current, [selectedNote.id]: { state: 'saved' } });
   }, [selectedNote]);
 
+  useEffect(() => {
+    if (!selectedNote) return;
+    const timer = window.setTimeout(() => titleInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [selectedId, selectedNote]);
+
+  useEffect(() => {
+    if (!deleteOpen) return;
+    const timer = window.setTimeout(() => deleteCancelRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [deleteOpen]);
+
   useEffect(() => () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
   }, []);
@@ -158,7 +174,9 @@ export function NotesApp({ initialNotes, initialError }: Props) {
     void refreshNotes(searchQuery);
   }, [refreshNotes, searchQuery]);
 
-  async function handleCreateNote() {
+  const filteredNotesCount = notes.length;
+
+  const handleCreateNote = useCallback(async () => {
     setCreating(true);
     try {
       const response = await fetch('/api/notes', { method: 'POST' });
@@ -179,7 +197,47 @@ export function NotesApp({ initialNotes, initialError }: Props) {
     } finally {
       setCreating(false);
     }
-  }
+  }, [setNoteSaveState]);
+
+  useEffect(() => {
+    createNoteShortcutRef.current = handleCreateNote;
+  }, [handleCreateNote]);
+
+  useEffect(() => {
+    function handleGlobalKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isTypingTarget = Boolean(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable));
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        void createNoteShortcutRef.current();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (deleteOpen) {
+          event.preventDefault();
+          setDeleteOpen(false);
+          return;
+        }
+
+        if (!isTypingTarget && mobileEditorOpen) {
+          event.preventDefault();
+          setMobileEditorOpen(false);
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [deleteOpen, mobileEditorOpen]);
 
   function queueSave(noteId: string, nextTitle: string, nextContent: string) {
     const lastSavedSnapshot = lastSavedSnapshots.current[noteId] ?? { title: '', content: '' };
@@ -227,7 +285,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
       const remaining = notes.filter((note) => note.id !== deletingId);
       setNotes(remaining);
       setSelectedId(remaining[0]?.id ?? null);
-      setMobileEditorOpen(false);
+      setMobileEditorOpen(Boolean(remaining[0]));
       setDeleteOpen(false);
       delete lastSavedSnapshots.current[deletingId];
       setSaveStates((current) => {
@@ -264,6 +322,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
               <div>
                 <p className="text-sm font-medium text-accent">QuickNotes</p>
                 <h1 className="mt-1 text-2xl font-semibold text-slate-900">Capture what matters</h1>
+                <p className="mt-2 text-sm text-slate-500">A focused note space with quick search, autosave, and keyboard shortcuts.</p>
               </div>
               <button
                 type="button"
@@ -278,13 +337,19 @@ export function NotesApp({ initialNotes, initialError }: Props) {
             <label className="mt-5 flex items-center gap-3 rounded-xl border border-stone-200 bg-stone-50 px-3 py-3 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20">
               <Search className="size-4 text-slate-400" />
               <input
+                ref={searchInputRef}
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
                 placeholder="Search notes"
                 className="w-full bg-transparent text-sm text-slate-700 placeholder:text-slate-400"
                 aria-label="Search notes"
+                aria-describedby="search-help"
               />
             </label>
+            <div id="search-help" className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
+              <span>{searchQuery ? `${filteredNotesCount} result${filteredNotesCount === 1 ? '' : 's'}` : `${filteredNotesCount} note${filteredNotesCount === 1 ? '' : 's'}`}</span>
+              <span>⌘/Ctrl+K to search • ⌘/Ctrl+N for a new note</span>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -323,6 +388,9 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                     setSelectedId(note.id);
                     setMobileEditorOpen(true);
                   }}
+                  aria-pressed={selectedId === note.id}
+                  aria-current={selectedId === note.id ? 'true' : undefined}
+                  title={noteLabel(note.title)}
                   className={cn(
                     'w-full rounded-2xl border p-4 text-left transition focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2',
                     selectedId === note.id ? 'border-accent/30 bg-accent-soft' : 'border-transparent bg-transparent hover:border-stone-200 hover:bg-stone-100',
@@ -358,7 +426,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
             {selectedNote ? (
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-3">
-                  <span className={cn('text-sm', activeSaveState === 'error' ? 'text-rose-600' : 'text-slate-500')}>{saveLabel}</span>
+                  <span aria-live="polite" className={cn('text-sm', activeSaveState === 'error' ? 'text-rose-600' : 'text-slate-500')}>{saveLabel}</span>
                   {activeSaveState === 'error' && canRetrySave ? (
                     <button
                       type="button"
@@ -386,12 +454,21 @@ export function NotesApp({ initialNotes, initialError }: Props) {
               <div className="max-w-sm rounded-[28px] border border-dashed border-stone-300 bg-white/80 p-8 text-center shadow-panel">
                 <h2 className="text-xl font-semibold text-slate-900">Select a note or create a new one</h2>
                 <p className="mt-3 text-sm leading-6 text-slate-500">Your notes will appear here with calm autosave, quick search, and a clean writing space.</p>
+                <button
+                  type="button"
+                  onClick={handleCreateNote}
+                  className="mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-medium text-white transition hover:bg-accent/90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+                >
+                  <Plus className="size-4" />
+                  Create your first note
+                </button>
               </div>
             </div>
           ) : (
             <div className="flex flex-1 flex-col px-4 py-5 md:px-8 md:py-8">
               <div className="flex-1 rounded-[28px] border border-stone-200 bg-white px-5 py-5 shadow-panel md:px-8 md:py-8">
                 <input
+                  ref={titleInputRef}
                   value={editorTitle}
                   onChange={(event) => {
                     const value = event.target.value;
@@ -430,12 +507,19 @@ export function NotesApp({ initialNotes, initialError }: Props) {
       </div>
 
       {deleteOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4">
-          <div className="w-full max-w-sm rounded-[28px] bg-white p-6 shadow-panel">
-            <h2 className="text-lg font-semibold text-slate-900">Delete note?</h2>
-            <p className="mt-2 text-sm text-slate-500">This permanently deletes this note.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4" role="presentation" onClick={() => setDeleteOpen(false)}>
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-note-title"
+            aria-describedby="delete-note-description"
+            className="w-full max-w-sm rounded-[28px] bg-white p-6 shadow-panel"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="delete-note-title" className="text-lg font-semibold text-slate-900">Delete note?</h2>
+            <p id="delete-note-description" className="mt-2 text-sm text-slate-500">This permanently deletes this note.</p>
             <div className="mt-6 flex justify-end gap-3">
-              <button type="button" onClick={() => setDeleteOpen(false)} className="rounded-xl border border-stone-200 px-4 py-2 text-sm font-medium text-slate-600">Cancel</button>
+              <button ref={deleteCancelRef} type="button" onClick={() => setDeleteOpen(false)} className="rounded-xl border border-stone-200 px-4 py-2 text-sm font-medium text-slate-600 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2">Cancel</button>
               <button type="button" onClick={() => void handleDeleteNote()} className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-medium text-white">Delete</button>
             </div>
           </div>

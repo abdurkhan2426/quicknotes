@@ -125,6 +125,48 @@ describe('NotesApp', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('focuses search with the keyboard shortcut', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ notes: [note('a', 'Alpha', 'First body')] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      render(React.createElement(NotesApp, { initialNotes: [note('a', 'Alpha', 'First body')] }));
+      await Promise.resolve();
+    });
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+
+    expect(screen.getByLabelText(/search notes/i)).toHaveFocus();
+  });
+
+  it('opens an accessible delete dialog and closes it on escape', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ notes: [note('a', 'Alpha', 'First body')] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      render(React.createElement(NotesApp, { initialNotes: [note('a', 'Alpha', 'First body')] }));
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /delete note/i }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /cancel/i })).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
   it('offers a retry action after a failed save and resubmits successfully', async () => {
     let patchAttempts = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
