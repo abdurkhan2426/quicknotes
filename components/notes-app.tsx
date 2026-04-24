@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, LoaderCircle, Plus, Search, Trash2 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import type { NoteRecord } from '@/lib/db/queries';
@@ -42,6 +42,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
   const [errorMessage, setErrorMessage] = useState(initialError ?? '');
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingSave = useRef<PendingSave | null>(null);
+  const latestListRequest = useRef(0);
   const lastSavedSnapshots = useRef<Record<string, SaveSnapshot>>(
     Object.fromEntries(initialNotes.map((note) => [note.id, { title: note.title, content: note.content }])),
   );
@@ -125,11 +126,14 @@ export function NotesApp({ initialNotes, initialError }: Props) {
   }, []);
 
   const refreshNotes = useCallback(async (query: string, preferredId?: string | null) => {
+    const requestId = latestListRequest.current + 1;
+    latestListRequest.current = requestId;
     setLoadingList(true);
     try {
       const response = await fetch(`/api/notes${query ? `?query=${encodeURIComponent(query)}` : ''}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Unable to load notes.');
+      if (requestId !== latestListRequest.current) return;
       setNotes(data.notes);
       setErrorMessage('');
 
@@ -140,10 +144,13 @@ export function NotesApp({ initialNotes, initialError }: Props) {
         setSelectedId(data.notes[0]?.id ?? null);
       }
     } catch (error) {
+      if (requestId !== latestListRequest.current) return;
       const message = error instanceof Error ? error.message : 'Unable to load notes.';
       setErrorMessage(message);
     } finally {
-      setLoadingList(false);
+      if (requestId === latestListRequest.current) {
+        setLoadingList(false);
+      }
     }
   }, [selectedId]);
 
@@ -157,15 +164,16 @@ export function NotesApp({ initialNotes, initialError }: Props) {
       const response = await fetch('/api/notes', { method: 'POST' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Unable to create note.');
-      const nextNotes = [data.note as NoteRecord, ...notes.filter((note) => note.id !== data.note.id)];
-      setNotes(nextNotes);
-      setSelectedId(data.note.id);
+      const createdNote = data.note as NoteRecord;
+      latestListRequest.current += 1;
+      setNotes((current) => [createdNote, ...current.filter((note) => note.id !== createdNote.id)]);
+      setSelectedId(createdNote.id);
       setMobileEditorOpen(true);
       setSearchInput('');
       setSearchQuery('');
       setErrorMessage('');
-      lastSavedSnapshots.current[data.note.id] = { title: data.note.title, content: data.note.content };
-      setNoteSaveState(data.note.id, { state: 'saved' });
+      lastSavedSnapshots.current[createdNote.id] = { title: createdNote.title, content: createdNote.content };
+      setNoteSaveState(createdNote.id, { state: 'saved' });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to create note.');
     } finally {
@@ -174,6 +182,21 @@ export function NotesApp({ initialNotes, initialError }: Props) {
   }
 
   function queueSave(noteId: string, nextTitle: string, nextContent: string) {
+    const lastSavedSnapshot = lastSavedSnapshots.current[noteId] ?? { title: '', content: '' };
+    const unchanged = lastSavedSnapshot.title === nextTitle && lastSavedSnapshot.content === nextContent;
+
+    if (unchanged) {
+      if (pendingSave.current?.noteId === noteId) {
+        pendingSave.current = null;
+      }
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      setNoteSaveState(noteId, { state: 'saved' });
+      return;
+    }
+
     pendingSave.current = { noteId, title: nextTitle, content: nextContent };
     setNoteSaveState(noteId, { state: 'dirty', retry: { title: nextTitle, content: nextContent } });
 
