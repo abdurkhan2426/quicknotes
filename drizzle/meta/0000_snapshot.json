@@ -1,0 +1,37 @@
+{
+  "id": "quicknotes-initial",
+  "prevId": null,
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.notes": {
+      "name": "notes",
+      "schema": "",
+      "columns": {
+        "id": {"name": "id", "type": "uuid", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()"},
+        "title": {"name": "title", "type": "text", "primaryKey": false, "notNull": true, "default": "''"},
+        "content": {"name": "content", "type": "text", "primaryKey": false, "notNull": true, "default": "''"},
+        "search_text": {"name": "search_text", "type": "text", "primaryKey": false, "notNull": true, "default": "''"},
+        "created_at": {"name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()"},
+        "updated_at": {"name": "updated_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()"}
+      },
+      "indexes": {
+        "notes_updated_at_idx": {"name": "notes_updated_at_idx", "columns": [{"expression": "updated_at", "isExpression": false, "asc": true, "nulls": "last"}], "isUnique": false, "method": "btree", "concurrently": false, "with": {}},
+        "notes_search_text_idx": {"name": "notes_search_text_idx", "columns": [{"expression": "to_tsvector('simple', search_text)", "isExpression": true, "asc": true, "nulls": "last"}], "isUnique": false, "method": "gin", "concurrently": false, "with": {}}
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {"columns": {}, "schemas": {}, "tables": {}}
+}

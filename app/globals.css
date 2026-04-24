@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-stone-100 text-slate-900 antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+button,
+input,
+textarea {
+  @apply outline-none;
+}
+
+::selection {
+  @apply bg-accent/20 text-slate-900;
+}
