@@ -27,6 +27,26 @@ type Props = {
   initialError?: string;
 };
 
+function highlightMatch(text: string, query: string) {
+  const source = text || '';
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return source;
+
+  const normalizedSource = source.toLowerCase();
+  const normalizedQuery = trimmedQuery.toLowerCase();
+  const index = normalizedSource.indexOf(normalizedQuery);
+
+  if (index === -1) return source;
+
+  return (
+    <>
+      {source.slice(0, index)}
+      <mark className="rounded bg-amber-200/80 px-1 text-slate-900">{source.slice(index, index + trimmedQuery.length)}</mark>
+      {source.slice(index + trimmedQuery.length)}
+    </>
+  );
+}
+
 export function NotesApp({ initialNotes, initialError }: Props) {
   const [notes, setNotes] = useState(initialNotes);
   const [selectedId, setSelectedId] = useState(initialNotes[0]?.id ?? null);
@@ -346,9 +366,24 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                 aria-describedby="search-help"
               />
             </label>
-            <div id="search-help" className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
-              <span>{searchQuery ? `${filteredNotesCount} result${filteredNotesCount === 1 ? '' : 's'}` : `${filteredNotesCount} note${filteredNotesCount === 1 ? '' : 's'}`}</span>
-              <span>⌘/Ctrl+K to search • ⌘/Ctrl+N for a new note</span>
+            <div id="search-help" className="mt-2 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+              <span>{searchQuery ? `${filteredNotesCount} result${filteredNotesCount === 1 ? '' : 's'} for “${searchQuery}”` : `${filteredNotesCount} note${filteredNotesCount === 1 ? '' : 's'}`}</span>
+              <div className="flex items-center gap-2">
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchInput('');
+                      setSearchQuery('');
+                      searchInputRef.current?.focus();
+                    }}
+                    className="rounded-full border border-stone-200 bg-white px-2.5 py-1 font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-100"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+                <span>⌘/Ctrl+K • ⌘/Ctrl+N</span>
+              </div>
             </div>
           </div>
 
@@ -376,6 +411,11 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                 onAction={handleCreateNote}
               />
             ) : null}
+            {!loadingList && notes.length > 0 && searchQuery ? (
+              <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-900">
+                Showing notes matching <span className="font-semibold">“{searchQuery}”</span>. Search looks through note titles and content.
+              </div>
+            ) : null}
             <div className="space-y-2">
               {notes.map((note) => (
                 <button
@@ -397,10 +437,10 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <p className="line-clamp-1 text-sm font-semibold text-slate-900">{noteLabel(note.title)}</p>
-                    <span className="shrink-0 text-xs text-slate-500">Edited {formatRelativeTime(note.updatedAt)}</span>
+                    <p className="line-clamp-1 text-sm font-semibold text-slate-900">{highlightMatch(noteLabel(note.title), searchQuery)}</p>
+                    <span className="shrink-0 rounded-full bg-white/80 px-2 py-1 text-[11px] text-slate-500 shadow-sm">Edited {formatRelativeTime(note.updatedAt)}</span>
                   </div>
-                  <p className="mt-2 line-clamp-1 text-sm text-slate-600">{notePreview(note.content)}</p>
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{highlightMatch(notePreview(note.content), searchQuery)}</p>
                 </button>
               ))}
             </div>
@@ -408,7 +448,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
         </aside>
 
         <section className={cn('flex min-h-[calc(100vh-1.5rem)] flex-1 flex-col bg-stone-50', !mobileEditorOpen && 'hidden md:flex')}>
-          <div className="flex items-center justify-between border-b border-stone-200 px-4 py-4 md:px-8">
+          <div className="flex items-center justify-between border-b border-stone-200/80 bg-white/70 px-4 py-4 backdrop-blur-sm md:px-8">
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -421,6 +461,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
               <div>
                 <p className="text-sm font-medium text-slate-500">{selectedNote ? 'Editing note' : 'QuickNotes'}</p>
                 <p className="text-sm text-slate-400">{selectedNote ? noteLabel(editorTitle) : 'Select a note or create a new one'}</p>
+                {selectedNote && searchQuery ? <p className="mt-1 text-xs text-slate-400">Current search: “{searchQuery}”</p> : null}
               </div>
             </div>
             {selectedNote ? (
@@ -466,7 +507,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
             </div>
           ) : (
             <div className="flex flex-1 flex-col px-4 py-5 md:px-8 md:py-8">
-              <div className="flex-1 rounded-[28px] border border-stone-200 bg-white px-5 py-5 shadow-panel md:px-8 md:py-8">
+              <div className="flex-1 rounded-[28px] border border-stone-200 bg-white px-5 py-5 shadow-panel ring-1 ring-white/70 md:px-8 md:py-8">
                 <input
                   ref={titleInputRef}
                   value={editorTitle}
@@ -480,7 +521,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                   onBlur={() => selectedId ? void saveNote(selectedId, editorTitle, editorContent, true) : undefined}
                   placeholder="Untitled note"
                   aria-label="Note title"
-                  className="w-full border-none bg-transparent text-3xl font-semibold text-slate-900 placeholder:text-slate-300"
+                  className="w-full border-none bg-transparent text-3xl font-semibold tracking-tight text-slate-900 placeholder:text-slate-300"
                 />
                 <textarea
                   value={editorContent}
@@ -494,7 +535,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                   onBlur={() => selectedId ? void saveNote(selectedId, editorTitle, editorContent, true) : undefined}
                   placeholder="Start writing..."
                   aria-label="Note content"
-                  className="mt-5 min-h-[420px] w-full resize-none border-none bg-transparent text-base leading-7 text-slate-700 placeholder:text-slate-300"
+                  className="mt-5 min-h-[420px] w-full resize-none border-none bg-transparent text-[15px] leading-7 text-slate-700 placeholder:text-slate-300 md:text-base"
                 />
               </div>
               <div className="mt-4 flex flex-wrap gap-4 text-sm text-slate-500">

@@ -7,7 +7,11 @@
 }
 
 body {
-  @apply bg-stone-100 text-slate-900 antialiased;
+  @apply bg-gradient-to-br from-stone-100 via-stone-50 to-orange-50 text-slate-900 antialiased;
+}
+
+main {
+  @apply selection:bg-accent/20 selection:text-slate-900;
 }
 
 * {
@@ -19,6 +23,16 @@ button,
 input,
 textarea {
   @apply outline-none;
+}
+
+input,
+textarea {
+  @apply transition-colors duration-150;
+}
+
+input::placeholder,
+textarea::placeholder {
+  @apply text-slate-300;
 }
 
 ::selection {

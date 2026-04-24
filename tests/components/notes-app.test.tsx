@@ -125,6 +125,35 @@ describe('NotesApp', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('shows richer search feedback and clear action', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ notes: [note('a', 'Alpha planning', 'First body'), note('b', 'Bravo', 'Planning follow-up')] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      render(React.createElement(NotesApp, { initialNotes: [note('a', 'Alpha planning', 'First body'), note('b', 'Bravo', 'Planning follow-up')] }));
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/search notes/i), { target: { value: 'planning' } });
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/2 results for/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/planning/i).length).toBeGreaterThan(0);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /clear/i }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByLabelText(/search notes/i)).toHaveValue('');
+  });
+
   it('focuses search with the keyboard shortcut', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
