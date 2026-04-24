@@ -8,6 +8,20 @@ import { cn, formatRelativeTime, noteLabel, notePreview } from '@/lib/utils';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'dirty' | 'error';
 
+type SaveSnapshot = {
+  title: string;
+  content: string;
+};
+
+type PendingSave = SaveSnapshot & {
+  noteId: string;
+};
+
+type NoteSaveMeta = {
+  state: SaveState;
+  retry?: SaveSnapshot;
+};
+
 type Props = {
   initialNotes: NoteRecord[];
   initialError?: string;
@@ -19,7 +33,7 @@ export function NotesApp({ initialNotes, initialError }: Props) {
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [mobileEditorOpen, setMobileEditorOpen] = useState(false);
-  const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [saveStates, setSaveStates] = useState<Record<string, NoteSaveMeta>>({});
   const [editorTitle, setEditorTitle] = useState(initialNotes[0]?.title ?? '');
   const [editorContent, setEditorContent] = useState(initialNotes[0]?.content ?? '');
   const [loadingList, setLoadingList] = useState(false);
@@ -27,12 +41,66 @@ export function NotesApp({ initialNotes, initialError }: Props) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState(initialError ?? '');
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
-  const lastSavedSnapshot = useRef({ title: initialNotes[0]?.title ?? '', content: initialNotes[0]?.content ?? '' });
+  const pendingSave = useRef<PendingSave | null>(null);
+  const lastSavedSnapshots = useRef<Record<string, SaveSnapshot>>(
+    Object.fromEntries(initialNotes.map((note) => [note.id, { title: note.title, content: note.content }])),
+  );
 
   const selectedNote = useMemo(
     () => notes.find((note) => note.id === selectedId) ?? null,
     [notes, selectedId],
   );
+
+  const setNoteSaveState = useCallback((noteId: string, next: NoteSaveMeta) => {
+    setSaveStates((current) => ({ ...current, [noteId]: next }));
+  }, []);
+
+  const saveNote = useCallback(async (noteId: string, nextTitle: string, nextContent: string, force = false) => {
+    if (!noteId) return;
+
+    if (pendingSave.current?.noteId === noteId && pendingSave.current.title === nextTitle && pendingSave.current.content === nextContent) {
+      pendingSave.current = null;
+    }
+
+    const lastSavedSnapshot = lastSavedSnapshots.current[noteId] ?? { title: '', content: '' };
+    const unchanged = lastSavedSnapshot.title === nextTitle && lastSavedSnapshot.content === nextContent;
+    if (!force && unchanged) return;
+
+    setNoteSaveState(noteId, { state: 'saving' });
+
+    try {
+      const response = await fetch(`/api/notes/${noteId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: nextTitle, content: nextContent }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to save note.');
+      const note = data.note as NoteRecord;
+
+      lastSavedSnapshots.current[note.id] = { title: note.title, content: note.content };
+      setNotes((current) => [note, ...current.filter((item) => item.id !== note.id)].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)));
+      setNoteSaveState(note.id, { state: 'saved' });
+      setErrorMessage('');
+    } catch (error) {
+      setNoteSaveState(noteId, { state: 'error', retry: { title: nextTitle, content: nextContent } });
+      toast.error(error instanceof Error ? error.message : 'Unable to save note.');
+    }
+  }, [setNoteSaveState]);
+
+  const flushPendingSave = useCallback(async () => {
+    if (!pendingSave.current) return;
+
+    const nextPending = pendingSave.current;
+    pendingSave.current = null;
+
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+
+    await saveNote(nextPending.noteId, nextPending.title, nextPending.content);
+  }, [saveNote]);
 
   useEffect(() => {
     const timer = setTimeout(() => setSearchQuery(searchInput.trim()), 200);
@@ -43,16 +111,18 @@ export function NotesApp({ initialNotes, initialError }: Props) {
     if (!selectedNote) {
       setEditorTitle('');
       setEditorContent('');
-      lastSavedSnapshot.current = { title: '', content: '' };
-      setSaveState('idle');
       return;
     }
 
+    lastSavedSnapshots.current[selectedNote.id] ??= { title: selectedNote.title, content: selectedNote.content };
     setEditorTitle(selectedNote.title);
     setEditorContent(selectedNote.content);
-    lastSavedSnapshot.current = { title: selectedNote.title, content: selectedNote.content };
-    setSaveState('saved');
+    setSaveStates((current) => current[selectedNote.id] ? current : { ...current, [selectedNote.id]: { state: 'saved' } });
   }, [selectedNote]);
+
+  useEffect(() => () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+  }, []);
 
   const refreshNotes = useCallback(async (query: string, preferredId?: string | null) => {
     setLoadingList(true);
@@ -94,6 +164,8 @@ export function NotesApp({ initialNotes, initialError }: Props) {
       setSearchInput('');
       setSearchQuery('');
       setErrorMessage('');
+      lastSavedSnapshots.current[data.note.id] = { title: data.note.title, content: data.note.content };
+      setNoteSaveState(data.note.id, { state: 'saved' });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to create note.');
     } finally {
@@ -101,38 +173,25 @@ export function NotesApp({ initialNotes, initialError }: Props) {
     }
   }
 
-  async function saveNote(nextTitle: string, nextContent: string, force = false) {
-    if (!selectedId) return;
-    const unchanged = lastSavedSnapshot.current.title === nextTitle && lastSavedSnapshot.current.content === nextContent;
-    if (!force && unchanged) return;
+  function queueSave(noteId: string, nextTitle: string, nextContent: string) {
+    pendingSave.current = { noteId, title: nextTitle, content: nextContent };
+    setNoteSaveState(noteId, { state: 'dirty', retry: { title: nextTitle, content: nextContent } });
 
-    setSaveState('saving');
-    try {
-      const response = await fetch(`/api/notes/${selectedId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: nextTitle, content: nextContent }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Unable to save note.');
-      const note = data.note as NoteRecord;
-      lastSavedSnapshot.current = { title: note.title, content: note.content };
-      setNotes((current) => [note, ...current.filter((item) => item.id !== note.id)].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)));
-      setSaveState('saved');
-      setErrorMessage('');
-    } catch (error) {
-      setSaveState('error');
-      toast.error(error instanceof Error ? error.message : 'Unable to save note.');
-    }
-  }
-
-  function queueSave(nextTitle: string, nextContent: string) {
-    if (!selectedId) return;
-    setSaveState('dirty');
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      void saveNote(nextTitle, nextContent);
+      if (!pendingSave.current) return;
+      const nextPending = pendingSave.current;
+      pendingSave.current = null;
+      saveTimer.current = null;
+      void saveNote(nextPending.noteId, nextPending.title, nextPending.content);
     }, 700);
+  }
+
+  async function handleRetrySave() {
+    if (!selectedId) return;
+    const retryState = saveStates[selectedId]?.retry;
+    if (!retryState) return;
+    await saveNote(selectedId, retryState.title, retryState.content, true);
   }
 
   async function handleDeleteNote() {
@@ -147,19 +206,30 @@ export function NotesApp({ initialNotes, initialError }: Props) {
       setSelectedId(remaining[0]?.id ?? null);
       setMobileEditorOpen(false);
       setDeleteOpen(false);
+      delete lastSavedSnapshots.current[deletingId];
+      setSaveStates((current) => {
+        const next = { ...current };
+        delete next[deletingId];
+        return next;
+      });
+      if (pendingSave.current?.noteId === deletingId) {
+        pendingSave.current = null;
+      }
       toast.success('Note deleted');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to delete note.');
     }
   }
 
+  const activeSaveState = selectedId ? saveStates[selectedId]?.state ?? 'saved' : 'idle';
+  const canRetrySave = Boolean(selectedId && saveStates[selectedId]?.retry);
   const saveLabel = {
     idle: 'Ready',
     saving: 'Saving...',
     saved: 'Saved',
     dirty: 'Unsaved changes',
-    error: "Couldn't save. Retry.",
-  }[saveState];
+    error: "Couldn't save.",
+  }[activeSaveState];
 
   return (
     <main className="min-h-screen bg-stone-100 p-3 md:p-5">
@@ -224,6 +294,9 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                   type="button"
                   key={note.id}
                   onClick={() => {
+                    if (pendingSave.current?.noteId && pendingSave.current.noteId !== note.id) {
+                      void flushPendingSave();
+                    }
                     setSelectedId(note.id);
                     setMobileEditorOpen(true);
                   }}
@@ -261,7 +334,18 @@ export function NotesApp({ initialNotes, initialError }: Props) {
             </div>
             {selectedNote ? (
               <div className="flex items-center gap-3">
-                <span className={cn('text-sm', saveState === 'error' ? 'text-rose-600' : 'text-slate-500')}>{saveLabel}</span>
+                <div className="flex items-center gap-3">
+                  <span className={cn('text-sm', activeSaveState === 'error' ? 'text-rose-600' : 'text-slate-500')}>{saveLabel}</span>
+                  {activeSaveState === 'error' && canRetrySave ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleRetrySave()}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-100 focus-visible:ring-2 focus-visible:ring-rose-200"
+                    >
+                      Retry save
+                    </button>
+                  ) : null}
+                </div>
                 <button
                   type="button"
                   onClick={() => setDeleteOpen(true)}
@@ -288,11 +372,12 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                   value={editorTitle}
                   onChange={(event) => {
                     const value = event.target.value;
+                    if (!selectedId) return;
                     setEditorTitle(value);
                     setNotes((current) => current.map((note) => note.id === selectedId ? { ...note, title: value, content: editorContent } : note));
-                    queueSave(value, editorContent);
+                    queueSave(selectedId, value, editorContent);
                   }}
-                  onBlur={() => void saveNote(editorTitle, editorContent, true)}
+                  onBlur={() => selectedId ? void saveNote(selectedId, editorTitle, editorContent, true) : undefined}
                   placeholder="Untitled note"
                   aria-label="Note title"
                   className="w-full border-none bg-transparent text-3xl font-semibold text-slate-900 placeholder:text-slate-300"
@@ -301,11 +386,12 @@ export function NotesApp({ initialNotes, initialError }: Props) {
                   value={editorContent}
                   onChange={(event) => {
                     const value = event.target.value;
+                    if (!selectedId) return;
                     setEditorContent(value);
                     setNotes((current) => current.map((note) => note.id === selectedId ? { ...note, title: editorTitle, content: value } : note));
-                    queueSave(editorTitle, value);
+                    queueSave(selectedId, editorTitle, value);
                   }}
-                  onBlur={() => void saveNote(editorTitle, editorContent, true)}
+                  onBlur={() => selectedId ? void saveNote(selectedId, editorTitle, editorContent, true) : undefined}
                   placeholder="Start writing..."
                   aria-label="Note content"
                   className="mt-5 min-h-[420px] w-full resize-none border-none bg-transparent text-base leading-7 text-slate-700 placeholder:text-slate-300"
